@@ -1,235 +1,109 @@
-# Ngày 7 — Nền Tảng Dữ Liệu: Embedding & Vector Store
+# RAG System with Qdrant & OpenAI
+
+Hệ thống **Retrieval-Augmented Generation (RAG)** hoàn chỉnh, sử dụng sức mạnh phối hợp của OpenAI và Qdrant.
+
+## 🚀 Tính năng chính
+- 🎯 **Full OpenAI Stack**: Sử dụng `text-embedding-3-small` để nhúng và `gpt-4o-mini` để suy luận.
+- 🗄️ **Qdrant Vector DB**: Lưu trữ và truy vấn vector hiệu năng cao với Metadata Filter.
+- 🕸️ **Firecrawl Integration**: Tự động cào dữ liệu từ URL sang định dạng Markdown sạch.
+- 📁 **Multi-format Loader**: Hỗ trợ nạp dữ liệu từ PDF, DOCX, TXT và Markdown.
+- ⚡ **Hybrid Access**: Hỗ trợ cả giao diện Web (FastAPI) và dòng lệnh (CLI Demo).
 
 ---
 
-## Mục Tiêu
-
-Sau lab này, bạn cần có thể:
-- Giải thích cosine similarity và dự đoán điểm tương đồng giữa các văn bản
-- Triển khai 3 chiến lược chunking và so sánh ưu nhược điểm
-- Xây dựng vector store với search, filter, và delete
-- Kết nối knowledge base với agent qua RAG pattern
-- Chỉ ra khi nào retrieval giúp ích và khi nào nó thất bại
+## 🛠️ Công nghệ sử dụng
+- **Vector Database**: [Qdrant](https://qdrant.tech/)
+- **LLM (Generation)**: OpenAI `gpt-4o-mini`
+- **Embedding**: OpenAI `text-embedding-3-small` (1536 dims)
+- **Web Scraping**: [Firecrawl](https://firecrawl.dev/) (Self-hosted)
+- **Framework**: FastAPI, Pydantic v2, Loguru
 
 ---
 
-## Cấu Trúc Lab: 2 Phase
-
-### Phase 1 — Cá Nhân: Hoàn Thành src package
-
-Mỗi sinh viên **tự mình** hoàn thành tất cả TODO trong `src/chunking.py`, `src/store.py`, và `src/agent.py`. `Document` dataclass và `FixedSizeChunker` đã được implement sẵn làm ví dụ.
-
-### Phase 2 — Nhóm: So Sánh Retrieval Strategy
-
-Nhóm cùng chọn một bộ tài liệu và thống nhất 5 benchmark queries. Mỗi thành viên **thử strategy riêng** (chunking, metadata), chạy cùng queries, rồi **so sánh kết quả trong nhóm** để học từ nhau.
+## 📂 Cấu trúc thư mục
+```
+day07/
+├── main.py                   # Entry point (FastAPI server & CLI Demo)
+├── .env                      # Cấu hình API Keys và URL
+├── rag/
+│   ├── pipeline.py           # Orchestrator (Nhạc trưởng điều phối RAG)
+│   ├── ingestion/            # Loader, Chunker, Indexer
+│   ├── retrieval/            # Retriever (Search & Filter)
+│   └── generation/           # OpenAIGenerator (GPT-4o-mini)
+├── data/                     # Thư mục chứa tài liệu mẫu (.txt, .md)
+└── scripts/                  # Các script CLI bổ trợ
+```
 
 ---
 
-## Thiết Lập Môi Trường
+## ⚙️ Cài đặt & Cấu hình
 
+### 1. Cài đặt thư viện
 ```bash
 pip install -r requirements.txt
-pytest tests/ -v          # Phần lớn tests sẽ FAIL (chưa implement)
 ```
 
-Mặc định, lab vẫn chạy với `_mock_embed` nên **không bắt buộc** cài embedder thật.
-File `.env` được tự động nạp khi chạy `main.py`. Với các Python snippet chạy trực tiếp, hãy `export` biến môi trường cần thiết hoặc gọi `load_dotenv()` nếu cần.
+### 2. Thiết lập môi trường
+Tạo file `.env` từ `.env.example` và điền các thông tin:
+```dotenv
+OPENAI_API_KEY=sk-...
+FIRECRAWL_API_URL=http://localhost:3002
+QDRANT_URL=http://localhost:6333
+```
 
-## Tùy Chọn Embedding Backend
+---
 
-### 1) Mặc định: Mock embedder
+## 🚀 Cách sử dụng
 
-Không cần cài gì thêm ngoài:
+### 1. Chế độ Manual Demo (Dòng lệnh)
+Dùng để kiểm tra nhanh hệ thống bằng cách nạp toàn bộ file trong thư mục `data/` và trả lời câu hỏi:
 ```bash
-pip install -r requirements.txt
+# Chạy demo với câu hỏi mặc định
+python3 main.py
+
+# Chạy demo với câu hỏi cụ thể
+python3 main.py "Hệ thống RAG này hoạt động như thế nào?"
 ```
 
-### 2) Tùy chọn: Local embedder `all-MiniLM-L6-v2`
-
+### 2. Chế độ Web Server (FastAPI)
+Dùng để tích hợp vào ứng dụng khác hoặc dùng giao diện Swagger:
 ```bash
-pip install sentence-transformers
-python3 - <<'PY'
-from src import LocalEmbedder
-embedder = LocalEmbedder()
-print(embedder._backend_name)
-print(len(embedder("embedding smoke test")))
-PY
+uvicorn main:app --reload --port 8000
 ```
+Truy cập: `http://localhost:8000/docs` để thử nghiệm các endpoint `/ingest` và `/query`.
 
-- Package `src` hỗ trợ `all-MiniLM-L6-v2` qua `sentence-transformers`.
-- Lần chạy đầu tiên model sẽ được tải về và cache local.
-
-### 3) Tùy chọn: OpenAI embedder
-
+### 3. CLI Scripts bổ trợ
 ```bash
-pip install openai
-export OPENAI_API_KEY=your-key-here
-python3 - <<'PY'
-from src import OpenAIEmbedder
-embedder = OpenAIEmbedder()
-print(embedder._backend_name)
-print(len(embedder("embedding smoke test")))
-PY
-```
+# Nạp một file cụ thể
+python3 scripts/ingest.py file data/my_doc.pdf --language vi
 
-- Model mặc định cho lựa chọn này là `text-embedding-3-small`
-- Có thể đổi model bằng:
-```bash
-export OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-```
-
-### Quy tắc fallback
-
-- Nếu không chọn gì, lab dùng `_mock_embed`
-- Nếu chọn `local` hoặc `openai` nhưng setup thiếu, code sẽ tự fallback về `_mock_embed`
-- Có thể cấu hình qua `.env` mà không cần `source .env`
-- Script `main.py` chạy end-to-end và import public API từ package `src`
-
-### Lệnh verify nhanh
-
-Sau khi cài optional dependencies, có thể verify từng backend riêng:
-
-**Verify local embedder**
-
-```bash
-python3 - <<'PY'
-from src import LocalEmbedder
-
-embedder = LocalEmbedder()
-print(embedder._backend_name, len(embedder("embedding smoke test")))
-PY
-```
-
-**Verify OpenAI embedder**
-
-```bash
-python3 - <<'PY'
-from pathlib import Path
-from dotenv import load_dotenv
-from src import OpenAIEmbedder
-
-load_dotenv(dotenv_path=Path(".env"), override=False)
-embedder = OpenAIEmbedder()
-print(embedder._backend_name, len(embedder("embedding smoke test")))
-PY
-```
-
-> Lưu ý: `OpenAIEmbedder` cần `OPENAI_API_KEY` hợp lệ trong môi trường hoặc `.env`.
-
----
-
-## Cấu Trúc Thư Mục
-
-```
-├── README.md              ← Bạn đang đọc file này
-├── exercises.md           ← Bài tập (4 phần)
-├── main.py               ← Entry point cho manual demo
-├── src/
-│   ├── chunking.py       ← Chunking classes + similarity helper
-│   ├── store.py          ← EmbeddingStore
-│   ├── agent.py          ← KnowledgeBaseAgent
-│   └── ...               ← Các module nhỏ hơn
-├── data/                  ← Tài liệu mẫu + tài liệu nhóm (.txt/.md)
-├── tests/
-│   └── test_solution.py   ← Test suite (30+ tests)
-├── report/
-│   └── REPORT.md         ← Báo cáo (1 file/sinh viên)
-├── docs/
-│   ├── EVALUATION.md     ← Evaluation metrics
-│   ├── INSTRUCTOR_GUIDE.md ← Instructor notes
-│   └── SCORING.md        ← Tiêu chí chấm điểm
-└── requirements.txt
+# Hỏi trực tiếp qua script query
+python3 scripts/query.py ask "Nội dung chính của file a.md là gì?"
 ```
 
 ---
 
-## Các Giai Đoạn Lab
-
-| Giai Đoạn | Hoạt Động |
-|-----------|-----------|
-| Chuẩn bị tài liệu | Nhóm chọn domain, thu thập tài liệu, chuyển sang .md/.txt |
-| Lập trình cá nhân | Warm-up + implement tất cả TODO (cá nhân) |
-| Thiết kế strategy | Mỗi người thử strategy riêng, thống nhất 5 queries |
-| So sánh trong nhóm | Chạy benchmark, so sánh kết quả, chuẩn bị demo |
-| Demo & thảo luận | Trình bày strategy + so sánh, thảo luận liên nhóm |
+## 📊 Metadata Schema (Payload)
+Mỗi đoạn văn bản lưu trong Qdrant bao gồm các thông tin:
+- `source`: Nguồn tài liệu (URL hoặc đường dẫn file).
+- `content_type`: Loại nội dung (web, pdf, text, ...).
+- `created_at`: Thời gian nạp dữ liệu.
+- `text`: Nội dung văn bản gốc.
+- `tags`: Các thẻ phân loại.
 
 ---
 
-## Nhiệm Vụ Cá Nhân (Phase 1)
-
-### Đã implement sẵn (tham khảo)
-- `Document` dataclass — container cho text + metadata
-- `FixedSizeChunker` — sliding window chunking
-
-### Cần implement
-- `SentenceChunker` — chia theo ranh giới câu
-- `RecursiveChunker` — thử từng separator theo thứ tự
-- `compute_similarity` — cosine similarity
-- `ChunkingStrategyComparator` — so sánh 3 chiến lược
-- `EmbeddingStore` — wrapper quanh vector store (5 methods)
-- `KnowledgeBaseAgent` — RAG pattern agent
-
----
-
-## Nhiệm Vụ Nhóm (Phase 2) — So Sánh Strategy
-
-1. **Chọn bộ tài liệu** (5-10 docs): FAQ, SOP, policy, internal docs, hoặc domain bất kỳ
-2. **Chuyển sang .txt/.md** nếu cần (xem tips trong exercises.md)
-3. **Thống nhất 5 benchmark queries** kèm gold answers
-4. **Mỗi thành viên thử strategy riêng**: chunking method, tham số, metadata schema
-5. **So sánh kết quả trong nhóm**: strategy nào cho retrieval tốt hơn? Tại sao?
-
----
-
-## Cách Tự Đánh Giá Kết Quả Retrieval
-
-Khi chạy benchmark, đừng chỉ hỏi **"code có chạy không?"** mà hãy tự kiểm tra 5 góc nhìn sau:
-
-1. **Retrieval Precision**
-   - Top-3 có chứa chunk thật sự liên quan không?
-   - Score có tách được kết quả tốt và nhiễu không?
-
-2. **Chunk Coherence**
-   - Chunk có giữ được ý trọn vẹn không?
-   - Strategy nào làm chunk dễ đọc và dễ retrieve hơn?
-
-3. **Metadata Utility**
-   - `search_with_filter()` có giúp tăng độ chính xác không?
-   - Filter có quá chặt, làm mất kết quả tốt không?
-
-4. **Grounding Quality**
-   - Câu trả lời của agent có thật sự dựa trên retrieved context không?
-   - Có thể chỉ ra chunk nào hỗ trợ câu trả lời không?
-
-5. **Data Strategy Impact**
-   - Bộ tài liệu nhóm chọn có phù hợp với benchmark queries không?
-   - Strategy chunking / metadata của bạn có hợp với domain không?
-
-> Xem `docs/EVALUATION.md` nếu bạn muốn một checklist chi tiết hơn cho phần này.
-
----
-
-## Chấm Điểm
-
-Xem chi tiết tại `docs/SCORING.md`. Tóm tắt:
-
-| Phần | Điểm |
-|------|------|
-| Cá nhân (code + phân tích) | 60 |
-| Nhóm (strategy + so sánh) | 40 |
-| **Tổng** | **100** |
-
----
-
-## Sản Phẩm Nộp Bài
-
-1. `src/` — hoàn thành tất cả TODO cần thiết
-2. `report/REPORT.md` — một báo cáo/sinh viên (gồm cả phần nhóm và cá nhân)
-
----
-
-## Chạy Kiểm Thử
-
-```bash
-pytest tests/ -v
+## 🏗️ Kiến trúc hệ thống
+```mermaid
+graph TD
+    A[User Query] --> B[Retriever]
+    B --> C{OpenAI Embeddings}
+    C --> D[(Qdrant Vector DB)]
+    D --> E[Relevant Chunks]
+    E --> F[OpenAI GPT-4o-mini]
+    F --> G[Deduplicated Sources]
+    F --> H[Final Answer]
 ```
+
+---
+> **Lưu ý**: Hệ thống yêu cầu Docker chạy Qdrant và Firecrawl Self-hosted để hoạt động đầy đủ tính năng quét Web.

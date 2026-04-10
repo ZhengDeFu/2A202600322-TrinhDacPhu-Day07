@@ -1,128 +1,167 @@
+"""
+main.py – FastAPI Server & CLI Manual Demo cho hệ thống RAG (Hybrid Mode).
+
+Cách dùng:
+  1. Chạy Web Server:  uvicorn main:app --reload
+  2. Chạy Manual Demo: python3 main.py [câu hỏi]
+"""
+
 from __future__ import annotations
 
 import os
 import sys
+import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from loguru import logger
 from dotenv import load_dotenv
 
-from src.agent import KnowledgeBaseAgent
-from src.embeddings import (
-    EMBEDDING_PROVIDER_ENV,
-    LOCAL_EMBEDDING_MODEL,
-    OPENAI_EMBEDDING_MODEL,
-    LocalEmbedder,
-    OpenAIEmbedder,
-    _mock_embed,
-)
-from src.models import Document
-from src.store import EmbeddingStore
+# Import các thành phần RAG đã xây dựng
+from rag.config import settings
+from rag.schema.metadata import DocumentInput
+from rag.ingestion.loader import DocumentLoader
+from rag.pipeline import RAGPipeline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIG & SAMPLES
+# ─────────────────────────────────────────────────────────────────────────────
+
+load_dotenv()
 
 SAMPLE_FILES = [
     "data/python_intro.txt",
     "data/vector_store_notes.md",
     "data/rag_system_design.md",
-    "data/customer_support_playbook.txt",
-    "data/chunking_experiment_report.md",
-    "data/vi_retrieval_notes.md",
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Global RAG Pipeline (Singleton)
+# ─────────────────────────────────────────────────────────────────────────────
 
-def load_documents_from_files(file_paths: list[str]) -> list[Document]:
-    """Load documents from file paths for the manual demo."""
-    allowed_extensions = {".md", ".txt"}
-    documents: list[Document] = []
+_pipeline: RAGPipeline | None = None
 
+def get_pipeline() -> RAGPipeline:
+    global _pipeline
+    if _pipeline is None:
+        _pipeline = RAGPipeline()
+    return _pipeline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI HELPERS (Theo mẫu yêu cầu)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_documents_from_files(file_paths: list[str]) -> list[DocumentInput]:
+    """Sử dụng DocumentLoader hiện có để đọc danh sách file."""
+    loader = DocumentLoader()
+    documents: list[DocumentInput] = []
+    
     for raw_path in file_paths:
         path = Path(raw_path)
-
-        if path.suffix.lower() not in allowed_extensions:
-            print(f"Skipping unsupported file type: {path} (allowed: .md, .txt)")
+        if not path.exists():
+            logger.warning(f"Bỏ qua file không tồn tại: {path}")
             continue
-
-        if not path.exists() or not path.is_file():
-            print(f"Skipping missing file: {path}")
-            continue
-
-        content = path.read_text(encoding="utf-8")
-        documents.append(
-            Document(
-                id=path.stem,
-                content=content,
-                metadata={"source": str(path), "extension": path.suffix.lower()},
-            )
-        )
-
+            
+        try:
+            # Tự động nhận diện định dạng trong load_from_file
+            doc = loader.load_from_file(path)
+            documents.append(doc)
+        except Exception as e:
+            logger.error(f"Lỗi khi load {path}: {e}")
+            
     return documents
 
-
-def demo_llm(prompt: str) -> str:
-    """A simple mock LLM for manual RAG testing."""
-    preview = prompt[:400].replace("\n", " ")
-    return f"[DEMO LLM] Generated answer from prompt preview: {preview}..."
-
-
 def run_manual_demo(question: str | None = None, sample_files: list[str] | None = None) -> int:
+    """Chế độ CLI Demo: Nạp tài liệu mẫu và trả lời câu hỏi."""
     files = sample_files or SAMPLE_FILES
-    query = question or "Summarize the key information from the loaded files."
+    query = question or "Tóm tắt các thông tin chính từ các tài liệu đã nạp."
 
-    print("=== Manual File Test ===")
-    print("Accepted file types: .md, .txt")
-    print("Input file list:")
-    for file_path in files:
-        print(f"  - {file_path}")
-
+    print("\n" + "═"*50)
+    print("🚀 ĐANG CHẠY RAG MANUAL DEMO (CLI MODE)")
+    print("═"*50)
+    
+    # 1. Load files
+    print(f"\n[1/3] Đang đọc {len(files)} file mẫu...")
     docs = load_documents_from_files(files)
     if not docs:
-        print("\nNo valid input files were loaded.")
-        print("Create files matching the sample paths above, then rerun:")
-        print("  python3 main.py")
+        print("❌ Không có file nào được nạp thành công. Hãy tạo thư mục 'data/' và thêm file mẫu.")
         return 1
 
-    print(f"\nLoaded {len(docs)} documents")
-    for doc in docs:
-        print(f"  - {doc.id}: {doc.metadata['source']}")
+    # 2. Ingest vào Vector DB (Qdrant)
+    print(f"\n[2/3] Đang nạp {len(docs)} tài liệu vào Qdrant (OpenAI Embedding)...")
+    pipeline = get_pipeline()
+    pipeline.ingest(docs)
 
-    load_dotenv(override=False)
-    provider = os.getenv(EMBEDDING_PROVIDER_ENV, "mock").strip().lower()
-    if provider == "local":
-        try:
-            embedder = LocalEmbedder(model_name=os.getenv("LOCAL_EMBEDDING_MODEL", LOCAL_EMBEDDING_MODEL))
-        except Exception:
-            embedder = _mock_embed
-    elif provider == "openai":
-        try:
-            embedder = OpenAIEmbedder(model_name=os.getenv("OPENAI_EMBEDDING_MODEL", OPENAI_EMBEDDING_MODEL))
-        except Exception:
-            embedder = _mock_embed
-    else:
-        embedder = _mock_embed
+    # 3. Query & Answer
+    print(f"\n[3/3] Đang thực hiện RAG cho câu hỏi: '{query}'")
+    result = pipeline.query(query)
 
-    print(f"\nEmbedding backend: {getattr(embedder, '_backend_name', embedder.__class__.__name__)}")
-
-    store = EmbeddingStore(collection_name="manual_test_store", embedding_fn=embedder)
-    store.add_documents(docs)
-
-    print(f"\nStored {store.get_collection_size()} documents in EmbeddingStore")
-    print("\n=== EmbeddingStore Search Test ===")
-    print(f"Query: {query}")
-    search_results = store.search(query, top_k=3)
-    for index, result in enumerate(search_results, start=1):
-        print(f"{index}. score={result['score']:.3f} source={result['metadata'].get('source')}")
-        print(f"   content preview: {result['content'][:120].replace(chr(10), ' ')}...")
-
-    print("\n=== KnowledgeBaseAgent Test ===")
-    agent = KnowledgeBaseAgent(store=store, llm_fn=demo_llm)
-    print(f"Question: {query}")
-    print("Agent answer:")
-    print(agent.answer(query, top_k=3))
+    print("\n" + "✨ CÂU TRẢ LỜI TỪ AGENT:")
+    print("━"*50)
+    print(result.answer)
+    print("━"*50)
+    
+    print("\n📚 Nguồn tham khảo:")
+    for source in result.sources:
+        print(f"  - {source}")
+    
     return 0
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FASTAPI APP
+# ─────────────────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Khởi tạo pipeline khi server bắt đầu."""
+    logger.info("Initializing RAG Pipeline for API...")
+    get_pipeline()
+    yield
+    logger.info("Shutting down RAG Server...")
+
+app = FastAPI(title="RAG System API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+)
+
+class QueryRequest(BaseModel):
+    question: str
+    top_k: int = 5
+
+@app.post("/query")
+async def api_query(req: QueryRequest):
+    pipeline = get_pipeline()
+    result = pipeline.query(req.question, top_k=req.top_k)
+    return {
+        "answer": result.answer,
+        "sources": result.sources,
+        "chunks": [{"text": c.text[:200], "score": c.score} for c in result.chunks]
+    }
+
+@app.post("/ingest/url")
+async def api_ingest_url(url: str, tags: list[str] = []):
+    pipeline = get_pipeline()
+    point_ids = pipeline.ingest_url(url, tags=tags)
+    return {"status": "success", "point_ids": point_ids}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    question = " ".join(sys.argv[1:]).strip() if len(sys.argv) > 1 else None
-    return run_manual_demo(question=question)
-
+    # Nếu có tham số dòng lệnh hoặc không có uvicorn (chạy trực tiếp)
+    # thì ưu tiên chạy Demo CLI
+    if len(sys.argv) > 1 or not os.getenv("RUN_AS_SERVER"):
+        question = " ".join(sys.argv[1:]).strip() if len(sys.argv) > 1 else None
+        return run_manual_demo(question=question)
+    return 0
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Lưu ý: Khi chạy uvicorn main:app, khối này sẽ không được thực thi.
+    # Nó chỉ chạy khi bạn gõ: python3 main.py
+    sys.exit(main())

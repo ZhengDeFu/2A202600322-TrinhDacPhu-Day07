@@ -1,15 +1,32 @@
-pytest>=7.0
-python-dotenv>=1.0
+# ── Vector Store ──────────────────────────────────────────────
+qdrant-client>=1.9.0
 
-# Optional manual-demo extras
-# Install local embedder support with:
-#   pip install sentence-transformers
-# Install OpenAI embedder support with:
-#   pip install openai
-# Install both optional embedders with:
-#   pip install openai sentence-transformers
-# sentence-transformers>=3.0
-# openai>=1.0
+# ── Embeddings (OpenAI API) ───────────────────────────────────
+openai>=1.30.0
 
-# Optional: for bonus tasks
-# chromadb>=0.4.0      # Real vector database integration
+# ── LLM – Google Gemini ───────────────────────────────────────
+google-generativeai>=0.7.0
+
+# ── Text splitting ────────────────────────────────────────────
+langchain-text-splitters>=0.2.0
+
+# ── Scraping (Firecrawl self-hosted) ──────────────────────────
+firecrawl-py>=1.0.0
+pymupdf>=1.24.0          # PDF support (fitz)
+python-docx>=1.1.0       # DOCX support
+
+# ── Validation / Config ───────────────────────────────────────
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.0
+
+# ── CLI & API ───────────────────────────────────────────────────
+typer[all]>=0.12.0
+rich>=13.0.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+python-multipart>=0.0.6
+
+# ── Utilities ─────────────────────────────────────────────────
+tqdm>=4.66.0
+loguru>=0.7.0
